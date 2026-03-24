@@ -76,10 +76,10 @@ $env:HF_TOKEN="your_token_here"
 
 ## Known Working Environment
 
-Python: 3.13.9
-whisperx: 3.8.2
-ffmpeg: 2025 build
-dotnet: 10.0.201
+- Python: 3.13.9
+- whisperx: 3.8.2
+- ffmpeg: 2025 build
+- dotnet: 10.0.201
 
 ## Project Structure
 
