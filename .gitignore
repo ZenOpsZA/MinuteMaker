@@ -1,0 +1,20 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Output folders
+*_output/
+audio.wav
+output_speakers.json
+python-output.log
+
+# OS
+Thumbs.db
+.DS_Store
