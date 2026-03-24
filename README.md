@@ -8,6 +8,32 @@ It combines:
 - pyannote (speaker diarization)
 - C# post-processing (clean, readable transcript output)
 
+⚠️ This tool runs entirely locally but requires initial model downloads via Hugging Face.
+
+---
+
+## Quick Start
+
+1. Install prerequisites:
+   - Python (3.10–3.11 recommended)
+   - FFmpeg
+   - .NET SDK
+
+2. Set your Hugging Face token:
+```
+$env:HF_TOKEN="your_token_here"
+```
+
+3. Install dependencies:
+```
+pip install -r requirements.txt
+```
+
+5. Run:
+```
+dotnet run
+```
+
 ---
 
 ## Features
@@ -30,6 +56,8 @@ It combines:
   - speaker attribution
   - wording corrections
 
+⚠️ First run may take several minutes due to model downloads.
+
 ---
 
 ## Requirements
@@ -37,7 +65,8 @@ It combines:
 ### Software
 
 - .NET SDK (tested with .NET 10)
-- Python (3.10 or 3.11 recommended)
+- Recommended: Python 3.10 or 3.11  
+- Tested with: Python 3.13.9
 - FFmpeg (must be available on PATH)
 
 Verify installation:
@@ -64,7 +93,11 @@ pip install -r requirements.txt
 
 1. Create an account: https://huggingface.co
 2. Generate a **read token**
-3. Accept access terms for diarization models (pyannote)
+3. Accept access to the diarization model:
+
+   https://huggingface.co/pyannote/speaker-diarization-community-1
+
+⚠️ You must accept access to the pyannote diarization model on Hugging Face, otherwise diarization will fail silently.
 
 Set your token (Windows PowerShell):
 
@@ -82,20 +115,43 @@ $env:HF_TOKEN="your_token_here"
 - dotnet: 10.0.201
 
 ## Project Structure
-
-```
+High-level structure of the application:
+```text
 MinuteMaker/
+  # Entry point
   Program.cs
+
+  # Process orchestration
   ProcessRunner.cs
+  PipelinePaths.cs
+  AppConfig.cs
+
+  # Transcript processing
   TranscriptCleaner.cs
   TranscriptFormatter.cs
   TranscriptSegment.cs
   WhisperXResult.cs
+  SpeakerMapService.cs
   CleaningOptions.cs
+  JsonFileService.cs
+
+  # Python pipeline
   transcribe_diarize.py
-  README.md
+
+  # Project config
+  MinuteMaker.csproj
   requirements.txt
+
+  # Documentation & licensing
+  README.md
+  LICENSE
 ```
+---
+
+## Why this project exists
+
+Most transcription tools rely on cloud services and do not provide reliable speaker separation.
+MinuteMaker focuses on a local-first workflow with structured outputs that can be used for governance, documentation, and downstream processing.
 
 ---
 
@@ -199,7 +255,7 @@ Meeting_output/
 ## Example Run
 
 ```
-Enter folder path containing recordings:
+Enter folder path containing recordings: D:\Meetings
 Available recordings:
 1. meeting.mp4
 
