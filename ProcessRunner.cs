@@ -196,6 +196,7 @@ namespace MinuteMaker
 
                 string? lastRenderedStage = null;
                 string lastElapsedText = "00:00";
+                var lastEndTime = DateTime.UtcNow;
 
                 while (!process.HasExited)
                 {
@@ -216,8 +217,11 @@ namespace MinuteMaker
                     {
                         if (lastRenderedStage is not null)
                         {
-                            Console.Write($"\r  ↳ {lastRenderedStage} done ({elapsedText})      ");
+                            var ended = DateTime.UtcNow - lastEndTime;
+                            var endedText = $"{(int)ended.TotalMinutes:00}:{ended.Seconds:00}";
+                            Console.Write($"\r  ↳ {lastRenderedStage} done ({endedText})      ");
                             Console.WriteLine();
+                            lastEndTime = DateTime.UtcNow;
                         }
 
                         lastRenderedStage = stage;
