@@ -1,12 +1,18 @@
 ﻿using MinuteMaker.MinuteMaker;
 using System.Text;
-using System.Text.Json;
 
 namespace MinuteMaker
 {
     internal static class Program
     {
         private sealed record InputSelection(string FolderPath, string FilePath);
+
+        private enum PipelineStartMode
+        {
+            FullRun,
+            ResumeFromExistingJson,
+            Cancel
+        }
 
         static async Task<int> Main(string[] args)
         {
@@ -35,48 +41,63 @@ namespace MinuteMaker
                 Console.WriteLine($"Selected: {Path.GetFileName(inputMediaPath)}");
                 Console.WriteLine($"Output folder: {paths.JobFolder}");
 
-                Console.Write("Step 1/4 - Extracting WAV with FFmpeg");
-                var ffmpegTask = ProcessRunner.RunAsync(
-                    fileName: config.FfmpegPath,
-                    arguments: $"-y -loglevel error -i \"{paths.SourceMediaPath}\" -ar 16000 -ac 1 -c:a pcm_s16le \"{paths.WavPath}\"",
-                    workingDirectory: paths.JobFolder,
-                    suppressOutput: true);
-
-                while (!ffmpegTask.IsCompleted)
+                var startMode = GetPipelineStartMode(paths);
+                if (startMode == PipelineStartMode.Cancel)
                 {
-                    Console.Write(".");
-                    await Task.Delay(1000);
+                    Console.WriteLine("Cancelled.");
+                    return 0;
                 }
 
-                await ffmpegTask;
-                Console.WriteLine(" done");
-
-                Console.WriteLine("Step 2/4 - Running WhisperX / diarization...");
-                var pythonEnv = new Dictionary<string, string?>
+                if (startMode == PipelineStartMode.FullRun)
                 {
-                    ["HF_TOKEN"] = config.HuggingFaceToken
-                };
+                    Console.Write("Step 1/4 - Extracting WAV with FFmpeg");
+                    var ffmpegTask = ProcessRunner.RunAsync(
+                        fileName: config.FfmpegPath,
+                        arguments: $"-y -loglevel error -i \"{paths.SourceMediaPath}\" -ar 16000 -ac 1 -c:a pcm_s16le \"{paths.WavPath}\"",
+                        workingDirectory: paths.JobFolder,
+                        suppressOutput: true);
 
-                await ProcessRunner.RunWithStageProgressAsync(
-                    fileName: config.PythonExePath,
-                    arguments:
-                        $"\"{config.PythonScriptPath}\" " +
-                        $"--input \"{paths.WavPath}\" " +
-                        $"--output \"{paths.RawJsonPath}\" " +
-                        $"--model \"{config.WhisperModel}\" " +
-                        $"--device \"{config.Device}\" " +
-                        $"--compute-type \"{config.ComputeType}\"",
-                    workingDirectory: paths.JobFolder,
-                    environmentVariables: pythonEnv,
-                    logFilePath: paths.PythonLogPath);
+                    while (!ffmpegTask.IsCompleted)
+                    {
+                        Console.Write(".");
+                        await Task.Delay(1000);
+                    }
 
-                if (!File.Exists(paths.RawJsonPath))
+                    await ffmpegTask;
+                    Console.WriteLine(" done");
+
+                    Console.WriteLine("Step 2/4 - Running WhisperX / diarization...");
+                    var pythonEnv = new Dictionary<string, string?>
+                    {
+                        ["HF_TOKEN"] = config.HuggingFaceToken
+                    };
+
+                    await ProcessRunner.RunWithStageProgressAsync(
+                        fileName: config.PythonExePath,
+                        arguments:
+                            $"\"{config.PythonScriptPath}\" " +
+                            $"--input \"{paths.WavPath}\" " +
+                            $"--output \"{paths.RawJsonPath}\" " +
+                            $"--model \"{config.WhisperModel}\" " +
+                            $"--device \"{config.Device}\" " +
+                            $"--compute-type \"{config.ComputeType}\"",
+                        workingDirectory: paths.JobFolder,
+                        environmentVariables: pythonEnv,
+                        logFilePath: paths.PythonLogPath);
+
+                    if (!File.Exists(paths.RawJsonPath))
+                    {
+                        throw new FileNotFoundException(
+                            $"Python completed but did not create the JSON output file:{Environment.NewLine}" +
+                            $"{paths.RawJsonPath}{Environment.NewLine}{Environment.NewLine}" +
+                            $"Check the Python log here:{Environment.NewLine}" +
+                            $"{paths.PythonLogPath}");
+                    }
+                }
+                else
                 {
-                    throw new FileNotFoundException(
-                        $"Python completed but did not create the JSON output file:{Environment.NewLine}" +
-                        $"{paths.RawJsonPath}{Environment.NewLine}{Environment.NewLine}" +
-                        $"Check the Python log here:{Environment.NewLine}" +
-                        $"{paths.PythonLogPath}");
+                    Console.WriteLine("Step 1/4 - Skipped (using existing output)");
+                    Console.WriteLine("Step 2/4 - Skipped (using existing diarized JSON)");
                 }
 
                 Console.WriteLine("Step 3/4 - Reading diarized JSON...");
@@ -97,7 +118,14 @@ namespace MinuteMaker
                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-                var speakerMap = SpeakerMapService.BuildInteractiveMap(rawSpeakers);
+                var speakerSamples = SpeakerSampleService.BuildSamples(transcript.Segments);
+
+                var speakerMap = SpeakerMapService.BuildInteractiveMap(
+                    rawSpeakers,
+                    speakerSamples,
+                    paths.SourceMediaPath,
+                    config.VlcPath);
+
                 JsonFileService.WriteJson(paths.SpeakerMapPath, speakerMap);
 
                 var options = config.CleaningOptions;
@@ -136,6 +164,38 @@ namespace MinuteMaker
                 Console.WriteLine("An error occurred:");
                 Console.WriteLine(ex);
                 return 1;
+            }
+        }
+
+        private static PipelineStartMode GetPipelineStartMode(PipelinePaths paths)
+        {
+            var hasOutputFolder = Directory.Exists(paths.JobFolder);
+            var hasJson = File.Exists(paths.RawJsonPath);
+
+            if (!hasOutputFolder || !hasJson)
+                return PipelineStartMode.FullRun;
+
+            Console.WriteLine();
+            Console.WriteLine("Existing output detected for this recording.");
+            Console.WriteLine("1. Re-run full pipeline");
+            Console.WriteLine("2. Resume from existing diarized JSON");
+            Console.WriteLine("3. Cancel");
+
+            while (true)
+            {
+                Console.Write("Select option (1-3): ");
+                var input = Console.ReadLine()?.Trim();
+
+                if (input == "1")
+                    return PipelineStartMode.FullRun;
+
+                if (input == "2")
+                    return PipelineStartMode.ResumeFromExistingJson;
+
+                if (input == "3")
+                    return PipelineStartMode.Cancel;
+
+                Console.WriteLine("Invalid selection. Try again.");
             }
         }
 
@@ -202,6 +262,5 @@ namespace MinuteMaker
 
             return $"{len:0.##} {sizes[order]}";
         }
-
     }
 }

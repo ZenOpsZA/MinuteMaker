@@ -29,7 +29,7 @@ $env:HF_TOKEN="your_token_here"
 pip install -r requirements.txt
 ```
 
-5. Run:
+4. Run:
 ```
 dotnet run
 ```
@@ -45,6 +45,7 @@ dotnet run
 - Clean, readable transcript output
 - Structured output files for further processing
 - Designed for governance, meetings, and decision extraction
+- 🎧 Optional VLC-assisted speaker identification (jump to speaker timestamps in original recording)
 
 ---
 
@@ -68,6 +69,7 @@ dotnet run
 - Recommended: Python 3.10 or 3.11  
 - Tested with: Python 3.13.9
 - FFmpeg (must be available on PATH)
+- VLC Media Player (optional, for speaker identification playback) [Optional]
 
 Verify installation:
 
@@ -216,6 +218,21 @@ dotnet run
 
 ---
 
+### VLC Configuration (Optional)
+
+The tool attempts to open VLC automatically using:
+
+- `vlc` from system PATH
+- Common installation locations
+
+If VLC is not detected, you can configure the path manually in `AppConfig`:
+
+```csharp
+VlcPath = @"C:\Program Files\VideoLAN\VLC\vlc.exe";
+```
+
+---
+
 ## Output Structure
 
 For input:
@@ -303,6 +320,24 @@ Configurable in the C# application:
 Defaults:
 - CPU mode
 - python from PATH
+
+---
+
+## Usage
+
+### Speaker Identification
+
+During the speaker naming step, the tool can optionally open the original recording at a representative timestamp for each detected speaker.
+
+This is especially useful for recordings from tools like Microsoft Teams or Zoom, where the active speaker is visually highlighted.
+
+Options during speaker mapping:
+
+- Open recording in VLC at a sample timestamp
+- Enter a display name for the speaker
+- Keep the default speaker label
+
+This feature helps improve speaker attribution accuracy during manual review.
 
 ---
 

@@ -11,6 +11,8 @@ namespace MinuteMaker
         public string PythonScriptPath { get; set; } =
             Path.Combine(AppContext.BaseDirectory, "transcribe_diarize.py");
 
+        public string? VlcPath { get; set; } = null;
+
         public string WhisperModel { get; set; } = "base";
         public string Device { get; set; } = "cpu";
         public string ComputeType { get; set; } = "int8";
