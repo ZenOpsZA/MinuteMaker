@@ -10,6 +10,7 @@ namespace MinuteMaker.Models.Pipeline
         public string CleanTranscriptPath { get; init; } = string.Empty;
         public string ReviewTranscriptPath { get; init; } = string.Empty;
         public string SpeakerMapPath { get; init; } = string.Empty;
+        public string CorrectionStatePath { get; init; } = string.Empty;
         public string PythonLogPath { get; init; } = string.Empty;
 
         public static PipelinePaths Create(string selectedFolder, string originalInputPath)
@@ -28,6 +29,7 @@ namespace MinuteMaker.Models.Pipeline
                 CleanTranscriptPath = Path.Combine(jobFolder, "transcript_clean.txt"),
                 ReviewTranscriptPath = Path.Combine(jobFolder, "transcript_review.txt"),
                 SpeakerMapPath = Path.Combine(jobFolder, "speaker-map.json"),
+                CorrectionStatePath = Path.Combine(jobFolder, "speaker-corrections.json"),
                 PythonLogPath = Path.Combine(jobFolder, "python-output.log")
             };
         }
