@@ -1,7 +1,5 @@
 using MinuteMaker.Models.Corrections;
-using MinuteMaker.Models.Speakers;
 using MinuteMaker.Models.Transcription;
-using MinuteMaker.Services.Speakers;
 
 namespace MinuteMaker.Services.Corrections
 {
@@ -15,111 +13,99 @@ namespace MinuteMaker.Services.Corrections
 
             correctionState ??= new CorrectionState();
 
-            var samples = SpeakerSampleService.BuildSamples(segments);
             var orderedSegments = segments
                 .Select((segment, index) => new IndexedSegment(index, segment))
                 .OrderBy(x => x.Segment.Start)
+                .ThenBy(x => x.Index)
                 .ToList();
 
-            var buckets = orderedSegments
-                .GroupBy(x => NormalizeSpeakerLabel(x.Segment.Speaker), StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(group => CreateBucket(group.Key, group.ToList(), samples))
+            var reviewItems = orderedSegments
+                .Select(CreateReviewItem)
                 .ToList();
 
-            var reviewRuns = buckets
-                .Select(bucket => CreateReviewRun(bucket, orderedSegments, correctionState))
-                .ToList();
+            var reviewRuns = ReviewRunBuilder.BuildRuns(reviewItems);
+            var suspiciousItems = SuspiciousReviewItemDetector.MarkSuspiciousItems(reviewRuns);
+            var speakerBuckets = BuildBuckets(reviewItems, reviewRuns);
 
             return new SpeakerCorrectionWorkspace
             {
-                SpeakerBuckets = buckets,
+                SpeakerBuckets = speakerBuckets,
                 ReviewRuns = reviewRuns,
+                SuspiciousReviewItems = suspiciousItems,
+                BucketCount = speakerBuckets.Count,
+                RunCount = reviewRuns.Count,
+                SuspiciousItemCount = suspiciousItems.Count,
                 CorrectionState = correctionState
             };
-        }
 
-        private static SpeakerBucket CreateBucket(
-            string speakerLabel,
-            IReadOnlyList<IndexedSegment> segments,
-            IReadOnlyDictionary<string, SpeakerSample> samples)
-        {
-            var bucket = new SpeakerBucket
+            ReviewItem CreateReviewItem(IndexedSegment indexedSegment)
             {
-                BucketId = BuildBucketId(speakerLabel),
-                RawSpeakerLabel = speakerLabel,
-                SegmentIndexes = segments
-                    .Select(x => x.Index)
-                    .OrderBy(x => x)
-                    .ToList()
-            };
+                var rawSpeakerLabel = NormalizeSpeakerLabel(indexedSegment.Segment.Speaker);
+                var itemId = BuildReviewItemId(indexedSegment.Index);
 
-            if (samples.TryGetValue(speakerLabel, out var sample))
-            {
-                var sampleSegment = segments.FirstOrDefault(x =>
-                    x.Segment.Start.Equals(sample.StartSeconds) &&
-                    x.Segment.End.Equals(sample.EndSeconds));
-
-                bucket.RepresentativeSample = new RepresentativeSample
+                return new ReviewItem
                 {
-                    SegmentIndex = sampleSegment?.Index ?? bucket.SegmentIndexes.First(),
-                    StartSeconds = sample.StartSeconds,
-                    EndSeconds = sample.EndSeconds,
-                    TextPreview = sample.TextPreview
+                    ItemId = itemId,
+                    SegmentIndex = indexedSegment.Index,
+                    BucketId = BuildBucketId(rawSpeakerLabel),
+                    RawSpeakerLabel = rawSpeakerLabel,
+                    EffectiveSpeakerLabel = CorrectionStateOverlayService.GetEffectiveSpeakerLabel(
+                        itemId,
+                        rawSpeakerLabel,
+                        correctionState),
+                    StartSeconds = indexedSegment.Segment.Start,
+                    EndSeconds = indexedSegment.Segment.End,
+                    Text = indexedSegment.Segment.Text ?? string.Empty
                 };
             }
-
-            return bucket;
         }
 
-        private static ReviewRun CreateReviewRun(
-            SpeakerBucket bucket,
-            IReadOnlyList<IndexedSegment> segments,
-            CorrectionState correctionState)
+        private static List<SpeakerBucket> BuildBuckets(
+            IReadOnlyList<ReviewItem> reviewItems,
+            IReadOnlyList<ReviewRun> reviewRuns)
         {
-            var items = segments
-                .Where(x => bucket.SegmentIndexes.Contains(x.Index))
-                .Select(x => CreateReviewItem(bucket, x, correctionState))
+            var runsByBucketId = reviewRuns
+                .SelectMany(run => run.BucketIds.Select(bucketId => new { bucketId, run }))
+                .GroupBy(x => x.bucketId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    x => x.Key,
+                    x => x.Select(y => y.run).DistinctBy(y => y.RunId).ToList(),
+                    StringComparer.OrdinalIgnoreCase);
+
+            return reviewItems
+                .GroupBy(x => x.BucketId, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var items = group
+                        .OrderBy(x => x.StartSeconds)
+                        .ThenBy(x => x.SegmentIndex)
+                        .ToList();
+
+                    var bucketRuns = runsByBucketId.TryGetValue(group.Key, out var matchedRuns)
+                        ? matchedRuns
+                        : new List<ReviewRun>();
+
+                    return new SpeakerBucket
+                    {
+                        BucketId = group.Key,
+                        RawSpeakerLabel = items[0].RawSpeakerLabel,
+                        SegmentIndexes = items.Select(x => x.SegmentIndex).ToList(),
+                        ReviewRunIds = bucketRuns.Select(x => x.RunId).ToList(),
+                        ReviewItemIds = items.Select(x => x.ItemId).ToList(),
+                        RepresentativeSamples = RepresentativeSampleSelector.SelectSamples(items),
+                        SegmentCount = items.Count,
+                        RunCount = bucketRuns.Count,
+                        TotalSpeakingDurationSeconds = items.Sum(x => Math.Max(0, x.EndSeconds - x.StartSeconds))
+                    };
+                })
                 .ToList();
-
-            return new ReviewRun
-            {
-                RunId = $"run:{bucket.BucketId}",
-                BucketId = bucket.BucketId,
-                StartSeconds = items.Count == 0 ? 0 : items.Min(x => x.StartSeconds),
-                EndSeconds = items.Count == 0 ? 0 : items.Max(x => x.EndSeconds),
-                Items = items
-            };
-        }
-
-        private static ReviewItem CreateReviewItem(
-            SpeakerBucket bucket,
-            IndexedSegment indexedSegment,
-            CorrectionState correctionState)
-        {
-            var itemId = BuildReviewItemId(indexedSegment.Index);
-            var rawSpeakerLabel = NormalizeSpeakerLabel(indexedSegment.Segment.Speaker);
-
-            return new ReviewItem
-            {
-                ItemId = itemId,
-                SegmentIndex = indexedSegment.Index,
-                BucketId = bucket.BucketId,
-                RawSpeakerLabel = rawSpeakerLabel,
-                EffectiveSpeakerLabel = CorrectionStateOverlayService.GetEffectiveSpeakerLabel(
-                    itemId,
-                    rawSpeakerLabel,
-                    correctionState),
-                StartSeconds = indexedSegment.Segment.Start,
-                EndSeconds = indexedSegment.Segment.End,
-                Text = indexedSegment.Segment.Text ?? string.Empty
-            };
         }
 
         private static string NormalizeSpeakerLabel(string? speakerLabel)
         {
             return string.IsNullOrWhiteSpace(speakerLabel)
-                ? "UNKNOWN"
+                ? SpeakerAssignmentValues.Unknown
                 : speakerLabel.Trim();
         }
 
