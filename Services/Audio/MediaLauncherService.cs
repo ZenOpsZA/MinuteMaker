@@ -1,6 +1,6 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 
-namespace MinuteMaker
+namespace MinuteMaker.Services.Audio
 {
     public static class MediaLauncherService
     {

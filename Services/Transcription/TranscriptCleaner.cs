@@ -1,9 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using MinuteMaker.Configuration;
+using MinuteMaker.Models.Transcription;
 using System.Text.RegularExpressions;
 
-namespace MinuteMaker
+namespace MinuteMaker.Services.Transcription
 {
     public static class TranscriptCleaner
     {
@@ -133,29 +132,29 @@ namespace MinuteMaker
 
             // Common noise / fragments / placeholders.
             var exactNoise = new HashSet<string>
-        {
-            "you",
-            "you.",
-            "okay",
-            "ok",
-            "ok.",
-            "yes",
-            "yes.",
-            "yeah",
-            "yeah.",
-            "right",
-            "right.",
-            "100%",
-            "100%.",
-            "mm",
-            "mmm",
-            "uh",
-            "uh.",
-            "um",
-            "um.",
-            "hmm",
-            "hmm."
-        };
+            {
+                "you",
+                "you.",
+                "okay",
+                "ok",
+                "ok.",
+                "yes",
+                "yes.",
+                "yeah",
+                "yeah.",
+                "right",
+                "right.",
+                "100%",
+                "100%.",
+                "mm",
+                "mmm",
+                "uh",
+                "uh.",
+                "um",
+                "um.",
+                "hmm",
+                "hmm."
+            };
 
             if (exactNoise.Contains(lower))
                 return true;
@@ -196,5 +195,4 @@ namespace MinuteMaker
             return result.Trim();
         }
     }
-
 }

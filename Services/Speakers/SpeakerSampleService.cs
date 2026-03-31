@@ -1,8 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using MinuteMaker.Models.Speakers;
+using MinuteMaker.Models.Transcription;
 
-namespace MinuteMaker
+namespace MinuteMaker.Services.Speakers
 {
     public static class SpeakerSampleService
     {
@@ -64,7 +63,7 @@ namespace MinuteMaker
         private static double Score(TranscriptSegment segment)
         {
             var duration = Math.Max(0, segment.End - segment.Start);
-            var textLength = (segment.Text?.Trim().Length ?? 0);
+            var textLength = segment.Text?.Trim().Length ?? 0;
 
             return duration * 10 + textLength;
         }

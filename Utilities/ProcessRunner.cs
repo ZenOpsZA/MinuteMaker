@@ -1,9 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 
-namespace MinuteMaker
+namespace MinuteMaker.Utilities
 {
     public sealed class ProcessRunResult
     {
@@ -14,7 +12,6 @@ namespace MinuteMaker
 
     public static class ProcessRunner
     {
-
         public static async Task RunAsync(
             string fileName,
             string arguments,
@@ -89,11 +86,11 @@ namespace MinuteMaker
         }
 
         public static async Task RunWithStageProgressAsync(
-    string fileName,
-    string arguments,
-    string workingDirectory,
-    IReadOnlyDictionary<string, string?>? environmentVariables = null,
-    string? logFilePath = null)
+            string fileName,
+            string arguments,
+            string workingDirectory,
+            IReadOnlyDictionary<string, string?>? environmentVariables = null,
+            string? logFilePath = null)
         {
             var startInfo = new ProcessStartInfo
             {

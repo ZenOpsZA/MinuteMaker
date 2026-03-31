@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Text.Json;
 
-namespace MinuteMaker
+namespace MinuteMaker.Services.Output
 {
     public static class JsonFileService
     {

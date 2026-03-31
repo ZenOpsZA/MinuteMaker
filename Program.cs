@@ -1,4 +1,10 @@
-﻿using MinuteMaker.MinuteMaker;
+using MinuteMaker.Configuration;
+using MinuteMaker.Models.Pipeline;
+using MinuteMaker.Models.Transcription;
+using MinuteMaker.Services.Output;
+using MinuteMaker.Services.Speakers;
+using MinuteMaker.Services.Transcription;
+using MinuteMaker.Utilities;
 using System.Text;
 
 namespace MinuteMaker

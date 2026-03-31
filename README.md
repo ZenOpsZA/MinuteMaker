@@ -15,22 +15,22 @@ It combines:
 ## Quick Start
 
 1. Install prerequisites:
-   - Python (3.10–3.11 recommended)
+   - Python (3.10-3.11 recommended)
    - FFmpeg
    - .NET SDK
 
 2. Set your Hugging Face token:
-```
+```powershell
 $env:HF_TOKEN="your_token_here"
 ```
 
 3. Install dependencies:
-```
-pip install -r requirements.txt
+```powershell
+pip install -r Integrations/Python/requirements.txt
 ```
 
 4. Run:
-```
+```powershell
 dotnet run
 ```
 
@@ -66,14 +66,14 @@ dotnet run
 ### Software
 
 - .NET SDK (tested with .NET 10)
-- Recommended: Python 3.10 or 3.11  
+- Recommended: Python 3.10 or 3.11
 - Tested with: Python 3.13.9
 - FFmpeg (must be available on PATH)
-- VLC Media Player (optional, for speaker identification playback) [Optional]
+- VLC Media Player (optional, for speaker identification playback)
 
 Verify installation:
 
-```
+```powershell
 dotnet --version
 python --version
 ffmpeg -version
@@ -85,8 +85,8 @@ ffmpeg -version
 
 Install using your preferred environment (recommended: virtual environment):
 
-```
-pip install -r requirements.txt
+```powershell
+pip install -r Integrations/Python/requirements.txt
 ```
 
 ---
@@ -103,7 +103,7 @@ pip install -r requirements.txt
 
 Set your token (Windows PowerShell):
 
-```
+```powershell
 $env:HF_TOKEN="your_token_here"
 ```
 
@@ -117,37 +117,57 @@ $env:HF_TOKEN="your_token_here"
 - dotnet: 10.0.201
 
 ## Project Structure
+
 High-level structure of the application:
+
 ```text
 MinuteMaker/
-  # Entry point
   Program.cs
-
-  # Process orchestration
-  ProcessRunner.cs
-  PipelinePaths.cs
-  AppConfig.cs
-
-  # Transcript processing
-  TranscriptCleaner.cs
-  TranscriptFormatter.cs
-  TranscriptSegment.cs
-  WhisperXResult.cs
-  SpeakerMapService.cs
-  CleaningOptions.cs
-  JsonFileService.cs
-
-  # Python pipeline
-  transcribe_diarize.py
-
-  # Project config
   MinuteMaker.csproj
-  requirements.txt
-
-  # Documentation & licensing
   README.md
   LICENSE
+
+  Configuration/
+    AppConfig.cs
+    CleaningOptions.cs
+
+  Models/
+    Pipeline/
+      PipelinePaths.cs
+    Speakers/
+      SpeakerSample.cs
+    Transcription/
+      TranscriptSegment.cs
+      WhisperXResult.cs
+
+  Services/
+    Audio/
+      MediaLauncherService.cs
+    Output/
+      JsonFileService.cs
+      TranscriptFormatter.cs
+    Speakers/
+      SpeakerMapService.cs
+      SpeakerSampleService.cs
+    Transcription/
+      TranscriptCleaner.cs
+
+  Utilities/
+    ProcessRunner.cs
+
+  Integrations/
+    Python/
+      requirements.txt
+      transcribe_diarize.py
 ```
+
+Namespace layout follows the folder structure, for example:
+
+- `MinuteMaker.Configuration`
+- `MinuteMaker.Models.Transcription`
+- `MinuteMaker.Services.Speakers`
+- `MinuteMaker.Utilities`
+
 ---
 
 ## Why this project exists
@@ -161,7 +181,7 @@ MinuteMaker focuses on a local-first workflow with structured outputs that can b
 
 ### 1. Clone repository
 
-```
+```powershell
 git clone https://github.com/ZenOpsZA/MinuteMaker
 cd MinuteMaker
 ```
@@ -170,18 +190,18 @@ cd MinuteMaker
 
 ### 2. Install Python dependencies
 
-```
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -U pip
-pip install -r requirements.txt
+pip install -r Integrations/Python/requirements.txt
 ```
 
 ---
 
 ### 3. Ensure FFmpeg is available
 
-```
+```powershell
 ffmpeg -version
 ```
 
@@ -189,7 +209,7 @@ ffmpeg -version
 
 ### 4. Build the application
 
-```
+```powershell
 dotnet build
 ```
 
@@ -197,7 +217,7 @@ dotnet build
 
 ## Running the Application
 
-```
+```powershell
 dotnet run
 ```
 
@@ -237,13 +257,13 @@ VlcPath = @"C:\Program Files\VideoLAN\VLC\vlc.exe";
 
 For input:
 
-```
+```text
 Meeting.mp4
 ```
 
 You will get:
 
-```
+```text
 Meeting.mp4
 Meeting_output/
   audio.wav
@@ -271,7 +291,7 @@ Meeting_output/
 
 ## Example Run
 
-```
+```text
 Enter folder path containing recordings: D:\Meetings
 Available recordings:
 1. meeting.mp4
@@ -284,10 +304,10 @@ Output folder: D:\Meetings\meeting_output
 Step 1/4 - Extracting WAV with FFmpeg.. done
 
 Step 2/4 - Running WhisperX / diarization...
-  ↳ Loading Whisper model done (00:04)
-  ↳ Transcribing / 01:17
-  ↳ Aligning \ 01:29
-  ↳ Running diarization | 03:12
+  -> Loading Whisper model done (00:04)
+  -> Transcribing / 01:17
+  -> Aligning \ 01:29
+  -> Running diarization | 03:12
 
 Step 2/4 - WhisperX pipeline complete
 ```
@@ -312,14 +332,16 @@ First run may be slower due to model downloads.
 Configurable in the C# application:
 
 - Python executable path
+- Python script path
 - Whisper model
-- Device (cpu / cuda)
+- Device (`cpu` / `cuda`)
 - Compute type
 - Cleaning rules
 
 Defaults:
 - CPU mode
-- python from PATH
+- `python` from PATH
+- bundled Python pipeline script at `Integrations/Python/transcribe_diarize.py`
 
 ---
 
@@ -345,8 +367,8 @@ This feature helps improve speaker attribution accuracy during manual review.
 
 ### No JSON output created
 
-- Check python-output.log
-- Ensure HF_TOKEN is set
+- Check `python-output.log`
+- Ensure `HF_TOKEN` is set
 - Confirm Hugging Face access accepted
 
 ---
@@ -361,7 +383,7 @@ This feature helps improve speaker attribution accuracy during manual review.
 ### Python not found
 
 - Install Python
-- Ensure it's on PATH
+- Ensure it is on PATH
 
 ---
 
@@ -407,4 +429,4 @@ This feature helps improve speaker attribution accuracy during manual review.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License. See `LICENSE` for details.

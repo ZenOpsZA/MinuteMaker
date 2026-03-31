@@ -1,8 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
+using MinuteMaker.Configuration;
+using MinuteMaker.Models.Transcription;
 using System.Text;
 
-namespace MinuteMaker
+namespace MinuteMaker.Services.Output
 {
     public static class TranscriptFormatter
     {

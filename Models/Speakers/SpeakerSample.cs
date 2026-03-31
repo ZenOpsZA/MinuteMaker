@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace MinuteMaker
+namespace MinuteMaker.Models.Speakers
 {
     public sealed class SpeakerSample
     {

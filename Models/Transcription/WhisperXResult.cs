@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Text.Json.Serialization;
 
-namespace MinuteMaker
+namespace MinuteMaker.Models.Transcription
 {
     public sealed class WhisperXResult
     {

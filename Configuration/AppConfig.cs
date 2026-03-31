@@ -1,15 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace MinuteMaker
+namespace MinuteMaker.Configuration
 {
     public sealed class AppConfig
     {
         public string FfmpegPath { get; set; } = "ffmpeg";
         public string PythonExePath { get; set; } = "python";
         public string PythonScriptPath { get; set; } =
-            Path.Combine(AppContext.BaseDirectory, "transcribe_diarize.py");
+            Path.Combine(AppContext.BaseDirectory, "Integrations", "Python", "transcribe_diarize.py");
 
         public string? VlcPath { get; set; } = null;
 

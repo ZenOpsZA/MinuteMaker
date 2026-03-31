@@ -1,8 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using MinuteMaker.Models.Speakers;
+using MinuteMaker.Services.Audio;
 
-namespace MinuteMaker
+namespace MinuteMaker.Services.Speakers
 {
     public static class SpeakerMapService
     {
