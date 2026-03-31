@@ -8,6 +8,13 @@ namespace MinuteMaker.Services.Corrections
 {
     public static class CorrectionConsoleWorkflowService
     {
+        private enum SessionStartMode
+        {
+            Continue,
+            Restart,
+            ReviewCompleted
+        }
+
         public static SpeakerCorrectionWorkspace RunInteractiveReview(
             IReadOnlyList<TranscriptSegment> segments,
             CorrectionState correctionState,
@@ -22,14 +29,65 @@ namespace MinuteMaker.Services.Corrections
 
             Console.WriteLine("Step 4/4 - Reviewing speaker corrections...");
             Console.WriteLine();
-            Console.WriteLine($"Buckets: {workspace.BucketCount}");
-            Console.WriteLine($"Runs: {workspace.RunCount}");
-            Console.WriteLine($"Suspicious items: {workspace.SuspiciousItemCount}");
+            DisplayWorkspaceOverview(workspace);
 
-            workspace = ReviewBuckets(workspace, segments, correctionStatePath, originalMediaPath, vlcPath);
-            workspace = ReviewSuspiciousItems(workspace, segments, correctionStatePath, originalMediaPath, vlcPath);
+            var startMode = ResolveSessionStartMode(workspace, correctionState, correctionStatePath);
+            workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, correctionState);
+
+            if (startMode != SessionStartMode.ReviewCompleted)
+            {
+                workspace = ReviewBuckets(workspace, segments, correctionStatePath, originalMediaPath, vlcPath);
+                workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, correctionState);
+                DisplayBucketAssignmentSummary(workspace);
+            }
+
+            workspace = RunReviewHub(workspace, segments, correctionStatePath, originalMediaPath, vlcPath);
+            workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, correctionState);
+
+            DisplayReviewSummary(workspace);
+            DisplayFinalSpeakerDistribution(workspace);
 
             return workspace;
+        }
+
+        private static SessionStartMode ResolveSessionStartMode(
+            SpeakerCorrectionWorkspace workspace,
+            CorrectionState correctionState,
+            string correctionStatePath)
+        {
+            if (!CorrectionSessionStateService.HasExistingSession(correctionState))
+                return SessionStartMode.Continue;
+
+            Console.WriteLine();
+            Console.WriteLine("Existing correction session detected.");
+            DisplaySessionSummary(workspace);
+            Console.WriteLine("1. Continue previous session");
+            Console.WriteLine("2. Restart correction");
+            Console.WriteLine("3. Review completed work");
+
+            while (true)
+            {
+                Console.Write("Select option (1-3): ");
+                var input = Console.ReadLine()?.Trim();
+
+                if (input == "1")
+                    return SessionStartMode.Continue;
+
+                if (input == "2")
+                {
+                    if (!Confirm("Clear existing overrides and session progress?"))
+                        continue;
+
+                    CorrectionSessionStateService.Reset(correctionState);
+                    CorrectionStateStore.Save(correctionStatePath, correctionState);
+                    return SessionStartMode.Restart;
+                }
+
+                if (input == "3")
+                    return SessionStartMode.ReviewCompleted;
+
+                Console.WriteLine("Invalid selection. Try again.");
+            }
         }
 
         private static SpeakerCorrectionWorkspace ReviewBuckets(
@@ -42,167 +100,353 @@ namespace MinuteMaker.Services.Corrections
             Console.WriteLine();
             Console.WriteLine("Bucket Review");
 
-            foreach (var bucketId in workspace.SpeakerBuckets.Select(x => x.BucketId).ToList())
+            var bucketIds = workspace.SpeakerBuckets.Select(x => x.BucketId).ToList();
+            if (bucketIds.Count == 0)
+                return workspace;
+
+            var currentIndex = ResolveBucketStartIndex(workspace);
+
+            while (true)
             {
-                while (true)
+                workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, workspace.CorrectionState);
+                bucketIds = workspace.SpeakerBuckets.Select(x => x.BucketId).ToList();
+
+                if (bucketIds.Count == 0)
+                    return workspace;
+
+                currentIndex = Math.Clamp(currentIndex, 0, bucketIds.Count - 1);
+
+                var bucket = workspace.SpeakerBuckets
+                    .First(x => string.Equals(x.BucketId, bucketIds[currentIndex], StringComparison.OrdinalIgnoreCase));
+
+                CorrectionSessionStateService.SetLastBucket(workspace.CorrectionState, bucket.BucketId);
+                SaveState(workspace.CorrectionState, correctionStatePath);
+
+                Console.WriteLine();
+                Console.WriteLine($"Bucket {currentIndex + 1} of {bucketIds.Count}");
+                DisplayBucket(bucket, workspace.CorrectionState);
+
+                Console.WriteLine("Commands: assign, unknown, mixed, raw, sample, next, previous, jump, review, done");
+                Console.Write("Command: ");
+                var command = (Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant();
+
+                if (command == "assign")
                 {
-                    var currentWorkspace = SpeakerCorrectionWorkspaceFactory.Create(segments, workspace.CorrectionState);
-                    var bucket = currentWorkspace.SpeakerBuckets
-                        .First(x => string.Equals(x.BucketId, bucketId, StringComparison.OrdinalIgnoreCase));
-
-                    DisplayBucket(bucket, currentWorkspace.CorrectionState);
-
-                    Console.WriteLine("1. Enter speaker name");
-                    Console.WriteLine($"2. Assign {SpeakerAssignmentValues.Unknown}");
-                    Console.WriteLine($"3. Assign {SpeakerAssignmentValues.Mixed}");
-                    Console.WriteLine("4. Open sample in VLC");
-                    Console.WriteLine("5. Use raw label");
-                    Console.WriteLine("6. Skip");
-                    Console.Write("Select option (1-6): ");
-
-                    var option = Console.ReadLine()?.Trim();
-                    if (option == "1")
-                    {
-                        var speaker = PromptForSpeakerName();
-                        if (speaker is null)
-                            continue;
-
-                        ApplyAndSave(
-                            currentWorkspace.CorrectionState,
-                            CorrectionScope.SpeakerBucket,
-                            bucket.BucketId,
-                            bucket.RawSpeakerLabel,
-                            speaker,
-                            correctionStatePath);
-
-                        workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, currentWorkspace.CorrectionState);
-                        break;
-                    }
-
-                    if (option == "2" || option == "3" || option == "5")
-                    {
-                        var assignedSpeaker = option switch
-                        {
-                            "2" => SpeakerAssignmentValues.Unknown,
-                            "3" => SpeakerAssignmentValues.Mixed,
-                            _ => bucket.RawSpeakerLabel
-                        };
-
-                        ApplyAndSave(
-                            currentWorkspace.CorrectionState,
-                            CorrectionScope.SpeakerBucket,
-                            bucket.BucketId,
-                            bucket.RawSpeakerLabel,
-                            assignedSpeaker,
-                            correctionStatePath);
-
-                        workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, currentWorkspace.CorrectionState);
-                        break;
-                    }
-
-                    if (option == "4")
-                    {
-                        OpenRepresentativeSample(bucket, originalMediaPath, vlcPath);
+                    var speaker = PromptForSpeakerName();
+                    if (speaker is null)
                         continue;
-                    }
 
-                    if (option == "6")
-                    {
-                        workspace = currentWorkspace;
-                        break;
-                    }
+                    ApplyAndSave(
+                        workspace.CorrectionState,
+                        CorrectionScope.SpeakerBucket,
+                        bucket.BucketId,
+                        bucket.RawSpeakerLabel,
+                        speaker,
+                        correctionStatePath);
 
-                    Console.WriteLine("Invalid selection. Try again.");
+                    CorrectionSessionStateService.MarkBucketAssigned(workspace.CorrectionState, bucket.BucketId);
+                    SaveState(workspace.CorrectionState, correctionStatePath);
+                    currentIndex = GetNextBucketIndex(bucketIds, currentIndex);
+                    continue;
                 }
-            }
 
-            return workspace;
+                if (command is "unknown" or "mixed" or "raw")
+                {
+                    var assignedSpeaker = command switch
+                    {
+                        "unknown" => SpeakerAssignmentValues.Unknown,
+                        "mixed" => SpeakerAssignmentValues.Mixed,
+                        _ => bucket.RawSpeakerLabel
+                    };
+
+                    ApplyAndSave(
+                        workspace.CorrectionState,
+                        CorrectionScope.SpeakerBucket,
+                        bucket.BucketId,
+                        bucket.RawSpeakerLabel,
+                        assignedSpeaker,
+                        correctionStatePath);
+
+                    CorrectionSessionStateService.MarkBucketAssigned(workspace.CorrectionState, bucket.BucketId);
+                    SaveState(workspace.CorrectionState, correctionStatePath);
+                    currentIndex = GetNextBucketIndex(bucketIds, currentIndex);
+                    continue;
+                }
+
+                if (command == "sample")
+                {
+                    OpenRepresentativeSample(bucket, originalMediaPath, vlcPath);
+                    continue;
+                }
+
+                if (command == "next")
+                {
+                    currentIndex = Math.Min(bucketIds.Count - 1, currentIndex + 1);
+                    continue;
+                }
+
+                if (command == "previous")
+                {
+                    currentIndex = Math.Max(0, currentIndex - 1);
+                    continue;
+                }
+
+                if (command == "jump")
+                {
+                    currentIndex = PromptForBucketIndex(workspace, currentIndex);
+                    continue;
+                }
+
+                if (command == "review")
+                {
+                    workspace = RunQueueSession(
+                        workspace,
+                        segments,
+                        correctionStatePath,
+                        originalMediaPath,
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.SpecificBucket,
+                            BucketId = bucket.BucketId,
+                            IncludeReviewedItems = true
+                        },
+                        "Bucket review");
+                    continue;
+                }
+
+                if (command == "done")
+                    return workspace;
+
+                Console.WriteLine("Invalid command. Try again.");
+            }
         }
 
-        private static SpeakerCorrectionWorkspace ReviewSuspiciousItems(
+        private static SpeakerCorrectionWorkspace RunReviewHub(
             SpeakerCorrectionWorkspace workspace,
             IReadOnlyList<TranscriptSegment> segments,
             string correctionStatePath,
             string originalMediaPath,
             string? vlcPath)
         {
-            Console.WriteLine();
-            Console.WriteLine("Suspicious Item Review");
-
-            var reviewedItemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var skippedItemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
             while (true)
             {
                 workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, workspace.CorrectionState);
 
-                var nextItem = workspace.SuspiciousReviewItems
-                    .OrderBy(x => x.StartSeconds)
-                    .ThenBy(x => x.SegmentIndex)
-                    .FirstOrDefault(x =>
-                        !reviewedItemIds.Contains(x.ItemId) &&
-                        !skippedItemIds.Contains(x.ItemId));
+                Console.WriteLine();
+                Console.WriteLine("Review Modes");
+                DisplaySessionSummary(workspace);
+                Console.WriteLine("1. Continue suspicious review");
+                Console.WriteLine("2. Revisit skipped suspicious items");
+                Console.WriteLine("3. Revisit all suspicious items");
+                Console.WriteLine("4. Review only Unknown speakers");
+                Console.WriteLine("5. Review a specific bucket");
+                Console.WriteLine("6. Full review mode");
+                Console.WriteLine("7. Finish review");
 
-                if (nextItem is null)
-                    break;
+                Console.Write("Select option (1-7): ");
+                var input = Console.ReadLine()?.Trim();
 
-                var run = workspace.ReviewRuns
-                    .First(x => string.Equals(x.RunId, nextItem.RunId, StringComparison.OrdinalIgnoreCase));
-                var bucket = workspace.SpeakerBuckets
-                    .First(x => string.Equals(x.BucketId, nextItem.BucketId, StringComparison.OrdinalIgnoreCase));
-
-                DisplaySuspiciousItem(nextItem, run, bucket);
-
-                Console.WriteLine("1. Keep current assignment");
-                Console.WriteLine("2. Change speaker assignment");
-                Console.WriteLine("3. Skip for later");
-                Console.WriteLine("4. Open recording in VLC");
-                Console.Write("Select option (1-4): ");
-
-                var option = Console.ReadLine()?.Trim();
-                if (option == "1")
+                if (input == "1")
                 {
-                    reviewedItemIds.Add(nextItem.ItemId);
-                    continue;
-                }
-
-                if (option == "2")
-                {
-                    var assignedSpeaker = PromptForSpeakerAssignment();
-                    if (assignedSpeaker is null)
-                        continue;
-
-                    var scope = PromptForCorrectionScope();
-                    if (scope is null)
-                        continue;
-
-                    ApplyScopedCorrection(
+                    workspace = RunQueueSession(
                         workspace,
-                        nextItem,
-                        run,
-                        bucket,
-                        assignedSpeaker,
-                        scope.Value,
-                        correctionStatePath);
-
-                    MarkReviewedByScope(reviewedItemIds, nextItem, run, bucket, scope.Value);
-                    skippedItemIds.RemoveWhere(x => reviewedItemIds.Contains(x));
-                    continue;
-                }
-
-                if (option == "3")
-                {
-                    skippedItemIds.Add(nextItem.ItemId);
-                    continue;
-                }
-
-                if (option == "4")
-                {
-                    var opened = MediaLauncherService.TryOpenInVlc(
+                        segments,
+                        correctionStatePath,
                         originalMediaPath,
-                        nextItem.StartSeconds,
-                        vlcPath);
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.SuspiciousOnly
+                        },
+                        "Suspicious review");
+                    continue;
+                }
 
+                if (input == "2")
+                {
+                    workspace = RunQueueSession(
+                        workspace,
+                        segments,
+                        correctionStatePath,
+                        originalMediaPath,
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.SuspiciousOnly,
+                            IncludeReviewedItems = true,
+                            OnlySkippedItems = true
+                        },
+                        "Skipped suspicious items");
+                    continue;
+                }
+
+                if (input == "3")
+                {
+                    workspace = RunQueueSession(
+                        workspace,
+                        segments,
+                        correctionStatePath,
+                        originalMediaPath,
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.SuspiciousOnly,
+                            IncludeReviewedItems = true
+                        },
+                        "All suspicious items");
+                    continue;
+                }
+
+                if (input == "4")
+                {
+                    workspace = RunQueueSession(
+                        workspace,
+                        segments,
+                        correctionStatePath,
+                        originalMediaPath,
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.UnassignedOnly
+                        },
+                        "Unknown speaker review");
+                    continue;
+                }
+
+                if (input == "5")
+                {
+                    var bucketId = PromptForBucketId(workspace);
+                    if (bucketId is null)
+                        continue;
+
+                    workspace = RunQueueSession(
+                        workspace,
+                        segments,
+                        correctionStatePath,
+                        originalMediaPath,
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.SpecificBucket,
+                            BucketId = bucketId,
+                            IncludeReviewedItems = true
+                        },
+                        "Specific bucket review");
+                    continue;
+                }
+
+                if (input == "6")
+                {
+                    workspace = RunQueueSession(
+                        workspace,
+                        segments,
+                        correctionStatePath,
+                        originalMediaPath,
+                        vlcPath,
+                        new ReviewQueueRequest
+                        {
+                            Mode = ReviewFilterMode.AllItems,
+                            IncludeReviewedItems = true
+                        },
+                        "Full review mode");
+                    continue;
+                }
+
+                if (input == "7")
+                    return workspace;
+
+                Console.WriteLine("Invalid selection. Try again.");
+            }
+        }
+
+        private static SpeakerCorrectionWorkspace RunQueueSession(
+            SpeakerCorrectionWorkspace workspace,
+            IReadOnlyList<TranscriptSegment> segments,
+            string correctionStatePath,
+            string originalMediaPath,
+            string? vlcPath,
+            ReviewQueueRequest request,
+            string heading)
+        {
+            Console.WriteLine();
+            Console.WriteLine(heading);
+
+            var currentIndex = 0;
+
+            while (true)
+            {
+                workspace = SpeakerCorrectionWorkspaceFactory.Create(segments, workspace.CorrectionState);
+                var queue = CorrectionReviewQueueService.BuildQueue(workspace, request);
+
+                if (queue.Count == 0)
+                {
+                    Console.WriteLine("No items available for this review mode.");
+                    return workspace;
+                }
+
+                if (!string.IsNullOrWhiteSpace(workspace.CorrectionState.Session.LastReviewItemId))
+                {
+                    var savedIndex = queue.FindIndex(x =>
+                        string.Equals(
+                            x.ItemId,
+                            workspace.CorrectionState.Session.LastReviewItemId,
+                            StringComparison.OrdinalIgnoreCase));
+
+                    if (savedIndex >= 0)
+                        currentIndex = savedIndex;
+                }
+
+                currentIndex = Math.Clamp(currentIndex, 0, queue.Count - 1);
+
+                var item = queue[currentIndex];
+                var run = workspace.ReviewRuns
+                    .First(x => string.Equals(x.RunId, item.RunId, StringComparison.OrdinalIgnoreCase));
+                var bucket = workspace.SpeakerBuckets
+                    .First(x => string.Equals(x.BucketId, item.BucketId, StringComparison.OrdinalIgnoreCase));
+
+                CorrectionSessionStateService.SetLastReviewItem(workspace.CorrectionState, item.ItemId);
+                SaveState(workspace.CorrectionState, correctionStatePath);
+
+                Console.WriteLine();
+                Console.WriteLine($"Item {currentIndex + 1} of {queue.Count}");
+                DisplayReviewItem(item, run, bucket);
+
+                Console.WriteLine("Commands: next, previous, keep, skip, revisit, change, open, accept-all, done");
+                Console.Write("Command: ");
+                var command = (Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant();
+
+                if (command is "next" or "keep")
+                {
+                    CorrectionSessionStateService.MarkReviewed(workspace.CorrectionState, new[] { item.ItemId });
+                    SaveState(workspace.CorrectionState, correctionStatePath);
+                    currentIndex = Math.Min(currentIndex + 1, queue.Count - 1);
+                    continue;
+                }
+
+                if (command == "previous")
+                {
+                    currentIndex = Math.Max(0, currentIndex - 1);
+                    continue;
+                }
+
+                if (command == "skip")
+                {
+                    CorrectionSessionStateService.MarkSkipped(workspace.CorrectionState, item.ItemId);
+                    SaveState(workspace.CorrectionState, correctionStatePath);
+                    currentIndex = Math.Min(currentIndex + 1, queue.Count - 1);
+                    continue;
+                }
+
+                if (command == "revisit")
+                {
+                    currentIndex = 0;
+                    continue;
+                }
+
+                if (command == "open")
+                {
+                    var opened = MediaLauncherService.TryOpenInVlc(originalMediaPath, item.StartSeconds, vlcPath);
                     if (!opened)
                     {
                         Console.WriteLine("Unable to open VLC. Check VLC installation/path.");
@@ -211,16 +455,131 @@ namespace MinuteMaker.Services.Corrections
                     continue;
                 }
 
-                Console.WriteLine("Invalid selection. Try again.");
-            }
+                if (command == "accept-all")
+                {
+                    var remainingItems = CorrectionReviewQueueService.GetRemainingItems(queue, currentIndex);
+                    if (remainingItems.Count == 0)
+                        continue;
 
-            if (skippedItemIds.Count > 0)
-            {
-                Console.WriteLine();
-                Console.WriteLine($"Skipped suspicious items: {skippedItemIds.Count}");
-            }
+                    if (!Confirm($"Mark {remainingItems.Count} remaining items as reviewed with no speaker changes?"))
+                        continue;
 
-            return workspace;
+                    CorrectionSessionStateService.MarkReviewed(
+                        workspace.CorrectionState,
+                        remainingItems.Select(x => x.ItemId));
+                    SaveState(workspace.CorrectionState, correctionStatePath);
+                    continue;
+                }
+
+                if (command == "change")
+                {
+                    var assignedSpeaker = PromptForSpeakerAssignment();
+                    if (assignedSpeaker is null)
+                        continue;
+
+                    var applyMode = PromptForApplyMode();
+                    if (string.IsNullOrWhiteSpace(applyMode))
+                        continue;
+
+                    if (applyMode == "segment" || applyMode == "run" || applyMode == "bucket")
+                    {
+                        var scope = applyMode switch
+                        {
+                            "segment" => CorrectionScope.Segment,
+                            "run" => CorrectionScope.ReviewRun,
+                            _ => CorrectionScope.SpeakerBucket
+                        };
+
+                        ApplyScopedCorrection(
+                            workspace,
+                            item,
+                            run,
+                            bucket,
+                            assignedSpeaker,
+                            scope,
+                            correctionStatePath);
+
+                        var reviewedIds = GetScopedItemIds(item, run, bucket, scope);
+                        CorrectionSessionStateService.MarkReviewed(workspace.CorrectionState, reviewedIds);
+                        CorrectionSessionStateService.ClearSkipped(workspace.CorrectionState, reviewedIds);
+                        SaveState(workspace.CorrectionState, correctionStatePath);
+                        continue;
+                    }
+
+                    if (applyMode == "remaining-bucket")
+                    {
+                        var remainingBucketItems = CorrectionReviewQueueService.GetRemainingItemsInBucket(
+                            queue,
+                            currentIndex,
+                            bucket.BucketId);
+
+                        if (remainingBucketItems.Count == 0)
+                            continue;
+
+                        if (!Confirm($"Apply '{assignedSpeaker}' to {remainingBucketItems.Count} remaining items in this bucket?"))
+                            continue;
+
+                        CorrectionBatchService.ApplyToItems(
+                            workspace.CorrectionState,
+                            remainingBucketItems,
+                            assignedSpeaker);
+
+                        var reviewedIds = remainingBucketItems.Select(x => x.ItemId).ToList();
+                        CorrectionSessionStateService.MarkReviewed(workspace.CorrectionState, reviewedIds);
+                        CorrectionSessionStateService.ClearSkipped(workspace.CorrectionState, reviewedIds);
+                        SaveState(workspace.CorrectionState, correctionStatePath);
+                        continue;
+                    }
+
+                    if (applyMode == "match-speaker")
+                    {
+                        var matchingItems = CorrectionReviewQueueService.GetItemsMatchingCurrentSpeaker(
+                            workspace,
+                            item.EffectiveSpeakerLabel);
+
+                        if (matchingItems.Count == 0)
+                            continue;
+
+                        if (!Confirm($"Apply '{assignedSpeaker}' to {matchingItems.Count} items matching speaker '{item.EffectiveSpeakerLabel}'?"))
+                            continue;
+
+                        CorrectionBatchService.ApplyToItems(
+                            workspace.CorrectionState,
+                            matchingItems,
+                            assignedSpeaker);
+
+                        var reviewedIds = matchingItems.Select(x => x.ItemId).ToList();
+                        CorrectionSessionStateService.MarkReviewed(workspace.CorrectionState, reviewedIds);
+                        CorrectionSessionStateService.ClearSkipped(workspace.CorrectionState, reviewedIds);
+                        SaveState(workspace.CorrectionState, correctionStatePath);
+                        continue;
+                    }
+
+                    continue;
+                }
+
+                if (command == "done")
+                    return workspace;
+
+                Console.WriteLine("Invalid command. Try again.");
+            }
+        }
+
+        private static void DisplayWorkspaceOverview(SpeakerCorrectionWorkspace workspace)
+        {
+            Console.WriteLine($"Buckets: {workspace.BucketCount}");
+            Console.WriteLine($"Runs: {workspace.RunCount}");
+            Console.WriteLine($"Suspicious items: {workspace.SuspiciousItemCount}");
+        }
+
+        private static void DisplaySessionSummary(SpeakerCorrectionWorkspace workspace)
+        {
+            var summary = CorrectionSessionStateService.BuildSummary(workspace, workspace.CorrectionState);
+            Console.WriteLine($"Overrides: {summary.OverrideCount}");
+            Console.WriteLine($"Buckets assigned: {summary.AssignedBucketCount}/{summary.TotalBucketCount}");
+            Console.WriteLine($"Suspicious reviewed: {summary.ReviewedSuspiciousCount}");
+            Console.WriteLine($"Suspicious remaining: {summary.RemainingSuspiciousCount}");
+            Console.WriteLine($"Suspicious skipped: {summary.SkippedSuspiciousCount}");
         }
 
         private static void DisplayBucket(SpeakerBucket bucket, CorrectionState correctionState)
@@ -230,7 +589,6 @@ namespace MinuteMaker.Services.Corrections
                 bucket.RawSpeakerLabel,
                 correctionState);
 
-            Console.WriteLine();
             Console.WriteLine($"Bucket: {bucket.RawSpeakerLabel}");
             Console.WriteLine($"Current assignment: {currentAssignment}");
             Console.WriteLine($"Segments: {bucket.SegmentCount}");
@@ -252,22 +610,69 @@ namespace MinuteMaker.Services.Corrections
             }
         }
 
-        private static void DisplaySuspiciousItem(ReviewItem item, ReviewRun run, SpeakerBucket bucket)
+        private static void DisplayReviewItem(ReviewItem item, ReviewRun run, SpeakerBucket bucket)
         {
-            Console.WriteLine();
-            Console.WriteLine($"Suspicious item {item.ItemId}");
+            Console.WriteLine($"Item: {item.ItemId}");
             Console.WriteLine(
                 $"Time: [{TranscriptFormatter.FormatTimestamp(item.StartSeconds)} - {TranscriptFormatter.FormatTimestamp(item.EndSeconds)}]");
             Console.WriteLine($"Current speaker: {item.EffectiveSpeakerLabel}");
-            Console.WriteLine($"Raw bucket: {bucket.RawSpeakerLabel}");
+            Console.WriteLine($"Raw speaker: {item.RawSpeakerLabel}");
+            Console.WriteLine($"Bucket: {bucket.RawSpeakerLabel}");
             Console.WriteLine($"Run: {run.RunId}");
 
-            var reasons = item.ReviewFlags
-                .Select(ReviewItemFlagLabelService.ToFriendlyLabel)
-                .ToList();
+            if (item.ReviewFlags.Count > 0)
+            {
+                var reasons = item.ReviewFlags
+                    .Select(ReviewItemFlagLabelService.ToFriendlyLabel)
+                    .ToList();
+                Console.WriteLine($"Reasons: {string.Join(", ", reasons)}");
+            }
 
-            Console.WriteLine($"Reasons: {string.Join(", ", reasons)}");
             Console.WriteLine($"Text: {BuildExcerpt(item.Text)}");
+        }
+
+        private static void DisplayBucketAssignmentSummary(SpeakerCorrectionWorkspace workspace)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Bucket assignment summary");
+
+            foreach (var bucket in workspace.SpeakerBuckets.OrderBy(x => x.RawSpeakerLabel, StringComparer.OrdinalIgnoreCase))
+            {
+                var assignedSpeaker = CorrectionStateOverlayService.GetBucketAssignedSpeaker(
+                    bucket.BucketId,
+                    bucket.RawSpeakerLabel,
+                    workspace.CorrectionState);
+
+                Console.WriteLine($"{bucket.RawSpeakerLabel} -> {assignedSpeaker}");
+            }
+        }
+
+        private static void DisplayReviewSummary(SpeakerCorrectionWorkspace workspace)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Review summary");
+
+            var summary = CorrectionSessionStateService.BuildSummary(workspace, workspace.CorrectionState);
+            Console.WriteLine($"Reviewed suspicious items: {summary.ReviewedSuspiciousCount}");
+            Console.WriteLine($"Remaining suspicious items: {summary.RemainingSuspiciousCount}");
+            Console.WriteLine($"Overrides applied: {summary.OverrideCount}");
+        }
+
+        private static void DisplayFinalSpeakerDistribution(SpeakerCorrectionWorkspace workspace)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Final speaker distribution");
+
+            var distribution = workspace.ReviewRuns
+                .SelectMany(x => x.Items)
+                .GroupBy(x => x.EffectiveSpeakerLabel, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(x => x.Count())
+                .ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var group in distribution)
+            {
+                Console.WriteLine($"{group.Key} -> {group.Count()} segments");
+            }
         }
 
         private static void OpenRepresentativeSample(
@@ -336,6 +741,21 @@ namespace MinuteMaker.Services.Corrections
                 correctionStatePath);
         }
 
+        private static List<string> GetScopedItemIds(
+            ReviewItem item,
+            ReviewRun run,
+            SpeakerBucket bucket,
+            CorrectionScope scope)
+        {
+            return scope switch
+            {
+                CorrectionScope.Segment => new List<string> { item.ItemId },
+                CorrectionScope.ReviewRun => run.Items.Select(x => x.ItemId).ToList(),
+                CorrectionScope.SpeakerBucket => bucket.ReviewItemIds.ToList(),
+                _ => new List<string> { item.ItemId }
+            };
+        }
+
         private static void ApplyAndSave(
             CorrectionState correctionState,
             CorrectionScope scope,
@@ -351,36 +771,82 @@ namespace MinuteMaker.Services.Corrections
                 originalSpeaker,
                 assignedSpeaker);
 
+            SaveState(correctionState, correctionStatePath);
+        }
+
+        private static void SaveState(CorrectionState correctionState, string correctionStatePath)
+        {
             CorrectionStateStore.Save(correctionStatePath, correctionState);
         }
 
-        private static void MarkReviewedByScope(
-            HashSet<string> reviewedItemIds,
-            ReviewItem item,
-            ReviewRun run,
-            SpeakerBucket bucket,
-            CorrectionScope scope)
+        private static int ResolveBucketStartIndex(SpeakerCorrectionWorkspace workspace)
         {
-            if (scope == CorrectionScope.Segment)
+            var bucketIds = workspace.SpeakerBuckets.Select(x => x.BucketId).ToList();
+            if (bucketIds.Count == 0)
+                return 0;
+
+            if (!string.IsNullOrWhiteSpace(workspace.CorrectionState.Session.LastBucketId))
             {
-                reviewedItemIds.Add(item.ItemId);
-                return;
+                var lastIndex = bucketIds.FindIndex(x =>
+                    string.Equals(x, workspace.CorrectionState.Session.LastBucketId, StringComparison.OrdinalIgnoreCase));
+
+                if (lastIndex >= 0)
+                    return lastIndex;
             }
 
-            if (scope == CorrectionScope.ReviewRun)
+            foreach (var bucketId in bucketIds)
             {
-                foreach (var itemId in run.Items.Select(x => x.ItemId))
-                {
-                    reviewedItemIds.Add(itemId);
-                }
-
-                return;
+                if (!workspace.CorrectionState.Session.AssignedBucketIds.Contains(bucketId, StringComparer.OrdinalIgnoreCase))
+                    return bucketIds.IndexOf(bucketId);
             }
 
-            foreach (var itemId in bucket.ReviewItemIds)
+            return 0;
+        }
+
+        private static int GetNextBucketIndex(IReadOnlyList<string> bucketIds, int currentIndex)
+        {
+            if (bucketIds.Count == 0)
+                return 0;
+
+            return Math.Min(bucketIds.Count - 1, currentIndex + 1);
+        }
+
+        private static int PromptForBucketIndex(SpeakerCorrectionWorkspace workspace, int currentIndex)
+        {
+            Console.WriteLine("Available buckets:");
+
+            for (int i = 0; i < workspace.SpeakerBuckets.Count; i++)
             {
-                reviewedItemIds.Add(itemId);
+                var bucket = workspace.SpeakerBuckets[i];
+                var currentAssignment = CorrectionStateOverlayService.GetBucketAssignedSpeaker(
+                    bucket.BucketId,
+                    bucket.RawSpeakerLabel,
+                    workspace.CorrectionState);
+
+                Console.WriteLine($"{i + 1}. {bucket.RawSpeakerLabel} -> {currentAssignment}");
             }
+
+            Console.Write($"Select bucket (1-{workspace.SpeakerBuckets.Count}): ");
+            var input = Console.ReadLine()?.Trim();
+
+            if (int.TryParse(input, out var selectedIndex) &&
+                selectedIndex >= 1 &&
+                selectedIndex <= workspace.SpeakerBuckets.Count)
+            {
+                return selectedIndex - 1;
+            }
+
+            Console.WriteLine("Invalid bucket selection.");
+            return currentIndex;
+        }
+
+        private static string? PromptForBucketId(SpeakerCorrectionWorkspace workspace)
+        {
+            var index = PromptForBucketIndex(workspace, 0);
+            if (index < 0 || index >= workspace.SpeakerBuckets.Count)
+                return null;
+
+            return workspace.SpeakerBuckets[index].BucketId;
         }
 
         private static string? PromptForSpeakerName()
@@ -412,23 +878,35 @@ namespace MinuteMaker.Services.Corrections
             return null;
         }
 
-        private static CorrectionScope? PromptForCorrectionScope()
+        private static string? PromptForApplyMode()
         {
-            Console.WriteLine("Apply correction scope:");
-            Console.WriteLine("1. This segment only");
+            Console.WriteLine("Apply correction:");
+            Console.WriteLine("1. This segment");
             Console.WriteLine("2. This run");
             Console.WriteLine("3. This bucket");
-            Console.WriteLine("4. Cancel");
-            Console.Write("Select option (1-4): ");
+            Console.WriteLine("4. All remaining items in this bucket");
+            Console.WriteLine("5. All items matching current speaker");
+            Console.WriteLine("6. Cancel");
+            Console.Write("Select option (1-6): ");
 
             var option = Console.ReadLine()?.Trim();
             return option switch
             {
-                "1" => CorrectionScope.Segment,
-                "2" => CorrectionScope.ReviewRun,
-                "3" => CorrectionScope.SpeakerBucket,
+                "1" => "segment",
+                "2" => "run",
+                "3" => "bucket",
+                "4" => "remaining-bucket",
+                "5" => "match-speaker",
                 _ => null
             };
+        }
+
+        private static bool Confirm(string message)
+        {
+            Console.Write($"{message} [y/N]: ");
+            var input = Console.ReadLine()?.Trim();
+            return string.Equals(input, "y", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(input, "yes", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string FormatDuration(double seconds)
