@@ -12,10 +12,64 @@ namespace MinuteMaker.Services.Corrections
         /// 3. SpeakerBucket override
         /// 4. Raw speaker label
         ///
-        /// Milestone 1.5 keeps runtime behavior narrow and only applies segment overrides today.
+        /// Runtime support now applies all three manual override scopes using the documented precedence.
         /// </summary>
         public static string GetEffectiveSpeakerLabel(
+            ReviewItem reviewItem,
+            CorrectionState? correctionState)
+        {
+            ArgumentNullException.ThrowIfNull(reviewItem);
+
+            return GetEffectiveSpeakerLabel(
+                reviewItem.ItemId,
+                reviewItem.RunId,
+                reviewItem.BucketId,
+                reviewItem.RawSpeakerLabel,
+                correctionState);
+        }
+
+        public static string GetEffectiveSpeakerLabel(
             string reviewItemId,
+            string? runId,
+            string? bucketId,
+            string rawSpeakerLabel,
+            CorrectionState? correctionState)
+        {
+            if (correctionState?.Overrides is null || correctionState.Overrides.Count == 0)
+                return rawSpeakerLabel;
+
+            var segmentMatch = correctionState.Overrides
+                .Where(x => x.Scope == CorrectionScope.Segment)
+                .LastOrDefault(x => string.Equals(x.TargetId, reviewItemId, StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrWhiteSpace(segmentMatch?.AssignedSpeaker))
+                return segmentMatch.AssignedSpeaker;
+
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                var runMatch = correctionState.Overrides
+                    .Where(x => x.Scope == CorrectionScope.ReviewRun)
+                    .LastOrDefault(x => string.Equals(x.TargetId, runId, StringComparison.OrdinalIgnoreCase));
+
+                if (!string.IsNullOrWhiteSpace(runMatch?.AssignedSpeaker))
+                    return runMatch.AssignedSpeaker;
+            }
+
+            if (!string.IsNullOrWhiteSpace(bucketId))
+            {
+                var bucketMatch = correctionState.Overrides
+                    .Where(x => x.Scope == CorrectionScope.SpeakerBucket)
+                    .LastOrDefault(x => string.Equals(x.TargetId, bucketId, StringComparison.OrdinalIgnoreCase));
+
+                if (!string.IsNullOrWhiteSpace(bucketMatch?.AssignedSpeaker))
+                    return bucketMatch.AssignedSpeaker;
+            }
+
+            return rawSpeakerLabel;
+        }
+
+        public static string GetBucketAssignedSpeaker(
+            string bucketId,
             string rawSpeakerLabel,
             CorrectionState? correctionState)
         {
@@ -23,8 +77,8 @@ namespace MinuteMaker.Services.Corrections
                 return rawSpeakerLabel;
 
             var match = correctionState.Overrides
-                .Where(x => x.Scope == CorrectionScope.Segment)
-                .LastOrDefault(x => string.Equals(x.TargetId, reviewItemId, StringComparison.OrdinalIgnoreCase));
+                .Where(x => x.Scope == CorrectionScope.SpeakerBucket)
+                .LastOrDefault(x => string.Equals(x.TargetId, bucketId, StringComparison.OrdinalIgnoreCase));
 
             return string.IsNullOrWhiteSpace(match?.AssignedSpeaker)
                 ? rawSpeakerLabel

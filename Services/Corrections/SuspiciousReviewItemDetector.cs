@@ -40,7 +40,7 @@ namespace MinuteMaker.Services.Corrections
             var duration = Math.Max(0, item.EndSeconds - item.StartSeconds);
             if (duration < CorrectionWorkspaceDefaults.ShortSegmentSeconds)
             {
-                AddFlag(item, "short-segment");
+                AddFlag(item, ReviewItemFlags.ShortSegment);
             }
         }
 
@@ -48,7 +48,7 @@ namespace MinuteMaker.Services.Corrections
         {
             if (HasRapidSwitch(item, previous) || HasRapidSwitch(item, next))
             {
-                AddFlag(item, "rapid-speaker-switch");
+                AddFlag(item, ReviewItemFlags.RapidSpeakerSwitch);
             }
         }
 
@@ -92,8 +92,8 @@ namespace MinuteMaker.Services.Corrections
 
             if (!currentEndsSentence || nextStartsLower)
             {
-                AddFlag(current, "mid-sentence-speaker-change");
-                AddFlag(next, "mid-sentence-speaker-change");
+                AddFlag(current, ReviewItemFlags.MidSentenceSpeakerChange);
+                AddFlag(next, ReviewItemFlags.MidSentenceSpeakerChange);
             }
         }
 
@@ -105,7 +105,7 @@ namespace MinuteMaker.Services.Corrections
             if (run.TotalDurationSeconds > CorrectionWorkspaceDefaults.FragmentedRunMaxDurationSeconds)
                 return;
 
-            AddFlag(run.Items[0], "fragmented-run");
+            AddFlag(run.Items[0], ReviewItemFlags.FragmentedRun);
         }
 
         private static bool EndsSentence(string text)

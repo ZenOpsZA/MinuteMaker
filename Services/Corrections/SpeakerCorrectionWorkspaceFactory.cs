@@ -24,6 +24,7 @@ namespace MinuteMaker.Services.Corrections
                 .ToList();
 
             var reviewRuns = ReviewRunBuilder.BuildRuns(reviewItems);
+            ApplyEffectiveSpeakerLabels(reviewRuns, correctionState);
             var suspiciousItems = SuspiciousReviewItemDetector.MarkSuspiciousItems(reviewRuns);
             var speakerBuckets = BuildBuckets(reviewItems, reviewRuns);
 
@@ -49,14 +50,33 @@ namespace MinuteMaker.Services.Corrections
                     SegmentIndex = indexedSegment.Index,
                     BucketId = BuildBucketId(rawSpeakerLabel),
                     RawSpeakerLabel = rawSpeakerLabel,
-                    EffectiveSpeakerLabel = CorrectionStateOverlayService.GetEffectiveSpeakerLabel(
-                        itemId,
-                        rawSpeakerLabel,
-                        correctionState),
+                    EffectiveSpeakerLabel = rawSpeakerLabel,
                     StartSeconds = indexedSegment.Segment.Start,
                     EndSeconds = indexedSegment.Segment.End,
                     Text = indexedSegment.Segment.Text ?? string.Empty
                 };
+            }
+        }
+
+        private static void ApplyEffectiveSpeakerLabels(
+            IReadOnlyList<ReviewRun> reviewRuns,
+            CorrectionState correctionState)
+        {
+            foreach (var run in reviewRuns)
+            {
+                foreach (var item in run.Items)
+                {
+                    item.EffectiveSpeakerLabel = CorrectionStateOverlayService.GetEffectiveSpeakerLabel(
+                        item.ItemId,
+                        run.RunId,
+                        item.BucketId,
+                        item.RawSpeakerLabel,
+                        correctionState);
+                }
+
+                run.SpeakerLabel = run.Items.Count == 0
+                    ? string.Empty
+                    : run.Items[0].EffectiveSpeakerLabel;
             }
         }
 
