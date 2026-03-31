@@ -1,0 +1,46 @@
+# Default: normalise text files
+* text=auto
+
+# Source code and config: keep LF in repo
+*.cs      text eol=lf
+*.csproj  text eol=lf
+*.sln     text eol=lf
+*.slnx    text eol=lf
+*.props   text eol=lf
+*.targets text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.xml     text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.editorconfig text eol=lf
+*.gitignore    text eol=lf
+*.gitattributes text eol=lf
+
+# Python / shell / ffmpeg helper scripts
+*.py   text eol=lf
+*.sh   text eol=lf
+
+# Windows-native scripts: keep CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Common binary assets
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.mp3  binary
+*.wav  binary
+*.mp4  binary
+*.mov  binary
+
+# Visual Studio / Rider generated user-specific files
+*.user     text eol=crlf
+*.suo      binary
+*.DotSettings.user text eol=crlf

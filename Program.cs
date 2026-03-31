@@ -1,8 +1,9 @@
 using MinuteMaker.Configuration;
+using MinuteMaker.Persistence.Corrections;
 using MinuteMaker.Models.Pipeline;
 using MinuteMaker.Models.Transcription;
+using MinuteMaker.Services.Corrections;
 using MinuteMaker.Services.Output;
-using MinuteMaker.Services.Speakers;
 using MinuteMaker.Services.Transcription;
 using MinuteMaker.Utilities;
 using System.Text;
@@ -117,28 +118,29 @@ namespace MinuteMaker
 
                 Console.WriteLine($"Raw segments: {transcript.Segments.Count}");
 
-                Console.WriteLine("Step 4/4 - Prompting for speaker names...");
-                var rawSpeakers = transcript.Segments
-                    .Select(s => string.IsNullOrWhiteSpace(s.Speaker) ? "UNKNOWN" : s.Speaker.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                var speakerSamples = SpeakerSampleService.BuildSamples(transcript.Segments);
-
-                var speakerMap = SpeakerMapService.BuildInteractiveMap(
-                    rawSpeakers,
-                    speakerSamples,
+                var correctionState = CorrectionStateStore.Load(paths.CorrectionStatePath);
+                var correctionWorkspace = CorrectionConsoleWorkflowService.RunInteractiveReview(
+                    transcript.Segments,
+                    correctionState,
+                    paths.CorrectionStatePath,
                     paths.SourceMediaPath,
                     config.VlcPath);
+                CorrectionStateStore.Save(paths.CorrectionStatePath, correctionWorkspace.CorrectionState);
 
+                var speakerMap = CorrectionTranscriptProjectionService.BuildBucketSpeakerMap(correctionWorkspace);
                 JsonFileService.WriteJson(paths.SpeakerMapPath, speakerMap);
+
+                var correctedSegments = CorrectionTranscriptProjectionService.BuildCorrectedSegments(
+                    transcript.Segments,
+                    correctionWorkspace);
+
+                var transcriptSpeakerMap = CorrectionTranscriptProjectionService.BuildIdentitySpeakerMap(correctedSegments);
 
                 var options = config.CleaningOptions;
 
-                var cleaned = TranscriptCleaner.CleanSegments(transcript.Segments, options);
+                var cleaned = TranscriptCleaner.CleanSegments(correctedSegments, options);
 
-                var cleanTranscript = TranscriptFormatter.ToReadableTranscript(cleaned, speakerMap, options);
+                var cleanTranscript = TranscriptFormatter.ToReadableTranscript(cleaned, transcriptSpeakerMap, options);
                 File.WriteAllText(paths.CleanTranscriptPath, cleanTranscript, Encoding.UTF8);
 
                 var reviewOptions = config.CleaningOptions.Clone();
@@ -148,8 +150,8 @@ namespace MinuteMaker
                 reviewOptions.MinTextLength = 1;
 
                 var reviewTranscript = TranscriptFormatter.ToReadableTranscript(
-                    transcript.Segments.OrderBy(s => s.Start).ToList(),
-                    speakerMap,
+                    correctedSegments.OrderBy(s => s.Start).ToList(),
+                    transcriptSpeakerMap,
                     reviewOptions);
 
                 File.WriteAllText(paths.ReviewTranscriptPath, reviewTranscript, Encoding.UTF8);
@@ -159,6 +161,7 @@ namespace MinuteMaker
                 Console.WriteLine($"Clean transcript : {paths.CleanTranscriptPath}");
                 Console.WriteLine($"Review transcript: {paths.ReviewTranscriptPath}");
                 Console.WriteLine($"Speaker map      : {paths.SpeakerMapPath}");
+                Console.WriteLine($"Corrections      : {paths.CorrectionStatePath}");
                 Console.WriteLine($"Raw JSON         : {paths.RawJsonPath}");
                 Console.WriteLine($"WAV              : {paths.WavPath}");
 
