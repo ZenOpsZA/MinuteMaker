@@ -218,7 +218,7 @@ namespace MinuteMaker
 
             var supportedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ".mp4", ".wav", ".mp3", ".m4a", ".mov"
+                ".mp4", ".wav", ".mp3", ".m4a", ".mov", ".wmv"
             };
 
             var files = Directory
