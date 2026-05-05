@@ -90,7 +90,8 @@ namespace MinuteMaker.Utilities
             string arguments,
             string workingDirectory,
             IReadOnlyDictionary<string, string?>? environmentVariables = null,
-            string? logFilePath = null)
+            string? logFilePath = null,
+            IEnumerable<string>? logPreambleLines = null)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -127,10 +128,18 @@ namespace MinuteMaker.Utilities
                 {
                     AutoFlush = true
                 };
+
+                if (logPreambleLines is not null)
+                {
+                    foreach (var line in logPreambleLines)
+                        logWriter.WriteLine(line);
+
+                    logWriter.WriteLine();
+                }
             }
 
             var stageLock = new object();
-            var currentStage = "Launching Python";
+            var currentStage = "Launching WhisperX";
             var stageChangedAt = DateTime.UtcNow;
 
             process.OutputDataReceived += (_, e) =>

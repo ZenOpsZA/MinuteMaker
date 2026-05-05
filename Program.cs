@@ -27,9 +27,11 @@ namespace MinuteMaker
 
             try
             {
-                var config = AppConfig.CreateDefault();
+                var config = AppConfig.Load();
 
                 Console.WriteLine("=== MinuteMaker ===");
+                Console.WriteLine($"Config file checked : {config.ConfigFilePath}");
+                Console.WriteLine($"Config file exists  : {config.ConfigFileExists}");
                 Console.WriteLine();
 
                 var selection = SelectInputFromFolder();
@@ -74,30 +76,42 @@ namespace MinuteMaker
                     Console.WriteLine(" done");
 
                     Console.WriteLine("Step 2/4 - Running WhisperX / diarization...");
-                    var pythonEnv = new Dictionary<string, string?>
+                    var whisperX = config.WhisperX;
+                    var whisperXExecutablePath = ResolveExecutablePath(whisperX.ExecutablePath, config.ConfigFilePath);
+                    var whisperXArguments = BuildWhisperXArguments(paths, config);
+                    var commandLine = $"{Quote(whisperXExecutablePath)} {whisperXArguments}";
+                    var validationOutput = await ValidateWhisperXConfigurationAsync(whisperXExecutablePath, whisperX, paths.JobFolder);
+
+                    var launchSummary = BuildWhisperXLaunchSummary(
+                        config,
+                        whisperXExecutablePath,
+                        commandLine,
+                        validationOutput);
+
+                    foreach (var line in launchSummary)
+                        Console.WriteLine(line);
+
+                    var whisperXEnv = new Dictionary<string, string?>
                     {
                         ["HF_TOKEN"] = config.HuggingFaceToken
                     };
 
                     await ProcessRunner.RunWithStageProgressAsync(
-                        fileName: config.PythonExePath,
-                        arguments:
-                            $"\"{config.PythonScriptPath}\" " +
-                            $"--input \"{paths.WavPath}\" " +
-                            $"--output \"{paths.RawJsonPath}\" " +
-                            $"--model \"{config.WhisperModel}\" " +
-                            $"--device \"{config.Device}\" " +
-                            $"--compute-type \"{config.ComputeType}\"",
+                        fileName: whisperXExecutablePath,
+                        arguments: whisperXArguments,
                         workingDirectory: paths.JobFolder,
-                        environmentVariables: pythonEnv,
-                        logFilePath: paths.PythonLogPath);
+                        environmentVariables: whisperXEnv,
+                        logFilePath: paths.PythonLogPath,
+                        logPreambleLines: launchSummary);
+
+                    NormalizeWhisperXOutputPath(paths);
 
                     if (!File.Exists(paths.RawJsonPath))
                     {
                         throw new FileNotFoundException(
-                            $"Python completed but did not create the JSON output file:{Environment.NewLine}" +
+                            $"WhisperX completed but did not create the JSON output file:{Environment.NewLine}" +
                             $"{paths.RawJsonPath}{Environment.NewLine}{Environment.NewLine}" +
-                            $"Check the Python log here:{Environment.NewLine}" +
+                            $"Check the WhisperX log here:{Environment.NewLine}" +
                             $"{paths.PythonLogPath}");
                     }
                 }
@@ -271,5 +285,245 @@ namespace MinuteMaker
 
             return $"{len:0.##} {sizes[order]}";
         }
+
+        private static string BuildWhisperXArguments(PipelinePaths paths, AppConfig config)
+        {
+            var whisperX = config.WhisperX;
+            var arguments = new List<string>
+            {
+                Quote(paths.WavPath),
+                "--output_dir",
+                Quote(paths.JobFolder),
+                "--output_format",
+                "json",
+                "--diarize",
+                "--model",
+                Quote(whisperX.Model),
+                "--device",
+                Quote(whisperX.Device),
+                "--compute_type",
+                Quote(whisperX.ComputeType),
+                "--batch_size",
+                whisperX.BatchSize.ToString()
+            };
+
+            if (!string.IsNullOrWhiteSpace(config.TranscriptionLanguage))
+            {
+                arguments.Add("--language");
+                arguments.Add(Quote(config.TranscriptionLanguage));
+            }
+
+            return string.Join(" ", arguments);
+        }
+
+        private static string ResolveExecutablePath(string configuredPath, string? configFilePath)
+        {
+            if (string.IsNullOrWhiteSpace(configuredPath))
+                throw new InvalidOperationException("WhisperX executable path is not configured.");
+
+            if (Path.IsPathRooted(configuredPath))
+                return Path.GetFullPath(configuredPath);
+
+            var solutionDirectory = FindAncestorContainingFile(Environment.CurrentDirectory, "MinuteMaker.slnx") ??
+                FindAncestorContainingFile(AppContext.BaseDirectory, "MinuteMaker.slnx");
+
+            var projectDirectory = FindAncestorContainingFile(Environment.CurrentDirectory, "MinuteMaker.csproj") ??
+                FindAncestorContainingFile(AppContext.BaseDirectory, "MinuteMaker.csproj");
+
+            if (!ContainsDirectorySeparator(configuredPath))
+            {
+                var pathExecutable = ResolveExecutableFromPath(configuredPath);
+                return pathExecutable ?? configuredPath;
+            }
+
+            foreach (var baseDirectory in GetExecutableBaseDirectories(configFilePath, solutionDirectory, projectDirectory))
+            {
+                var candidatePath = Path.GetFullPath(configuredPath, baseDirectory);
+                if (File.Exists(candidatePath))
+                    return candidatePath;
+            }
+
+            var preferredBaseDirectory = solutionDirectory ??
+                projectDirectory ??
+                Path.GetDirectoryName(configFilePath ?? string.Empty) ??
+                Environment.CurrentDirectory;
+
+            return Path.GetFullPath(configuredPath, preferredBaseDirectory);
+        }
+
+        private static async Task<string> ValidateWhisperXConfigurationAsync(
+            string executablePath,
+            WhisperXExecutionOptions whisperX,
+            string workingDirectory)
+        {
+            if (!string.Equals(whisperX.Device, "cuda", StringComparison.OrdinalIgnoreCase))
+                return "CUDA validation: skipped because Device is not cuda.";
+
+            if (string.Equals(whisperX.ExecutablePath, "whisperx", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("WARNING: Device is cuda but WhisperX ExecutablePath is just 'whisperx'. This may resolve to a global CPU install.");
+            }
+
+            if (!File.Exists(executablePath))
+            {
+                throw new FileNotFoundException(
+                    $"CUDA mode is configured but the WhisperX executable was not found: {executablePath}");
+            }
+
+            var pythonPath = Path.Combine(Path.GetDirectoryName(executablePath)!, "python.exe");
+            if (!File.Exists(pythonPath))
+            {
+                throw new FileNotFoundException(
+                    $"CUDA mode is configured but python.exe was not found next to WhisperX: {pythonPath}");
+            }
+
+            var result = await ProcessRunner.RunAndCaptureAsync(
+                fileName: pythonPath,
+                arguments: "-c \"import sys, torch; print(sys.executable); print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No CUDA')\"",
+                workingDirectory: workingDirectory);
+
+            var validationOutput = new StringBuilder();
+            validationOutput.AppendLine("CUDA validation:");
+            validationOutput.AppendLine($"  python.exe : {pythonPath}");
+            validationOutput.AppendLine("  command    : " + Quote(pythonPath) + " -c \"import sys, torch; print(sys.executable); print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No CUDA')\"");
+
+            foreach (var line in ReadNonEmptyLines(result.StandardOutput))
+                validationOutput.AppendLine($"  stdout     : {line}");
+
+            foreach (var line in ReadNonEmptyLines(result.StandardError))
+                validationOutput.AppendLine($"  stderr     : {line}");
+
+            var stdoutLines = ReadNonEmptyLines(result.StandardOutput).ToList();
+            var cudaAvailable = stdoutLines.Count >= 3 ? stdoutLines[2] : string.Empty;
+            if (result.ExitCode != 0 || !string.Equals(cudaAvailable, "True", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "CUDA mode is configured, but PyTorch did not report CUDA availability. " +
+                    $"Expected 'True' from torch.cuda.is_available(), got '{cudaAvailable}'.{Environment.NewLine}" +
+                    validationOutput);
+            }
+
+            return validationOutput.ToString().TrimEnd();
+        }
+
+        private static IReadOnlyList<string> BuildWhisperXLaunchSummary(
+            AppConfig config,
+            string whisperXExecutablePath,
+            string commandLine,
+            string validationOutput)
+        {
+            var whisperX = config.WhisperX;
+            var lines = new List<string>
+            {
+                "WhisperX configuration:",
+                $"  config path      : {config.ConfigFilePath}",
+                $"  config exists    : {config.ConfigFileExists}",
+                $"  executable input : {whisperX.ExecutablePath}",
+                $"  executable final : {whisperXExecutablePath}",
+                $"  model            : {whisperX.Model}",
+                $"  device           : {whisperX.Device}",
+                $"  compute type     : {whisperX.ComputeType}",
+                $"  batch size       : {whisperX.BatchSize}",
+                $"  command          : {commandLine}"
+            };
+
+            if (string.Equals(whisperX.Device, "cuda", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(whisperX.ExecutablePath, "whisperx", StringComparison.OrdinalIgnoreCase))
+            {
+                lines.Add("  warning          : Device is cuda but ExecutablePath is just 'whisperx'; this may resolve to a global CPU install.");
+            }
+
+            lines.AddRange(validationOutput.Split(
+                new[] { "\r\n", "\n" },
+                StringSplitOptions.RemoveEmptyEntries));
+
+            return lines;
+        }
+
+        private static IEnumerable<string> GetExecutableBaseDirectories(
+            string? configFilePath,
+            string? solutionDirectory,
+            string? projectDirectory)
+        {
+            yield return Environment.CurrentDirectory;
+
+            if (solutionDirectory is not null)
+                yield return solutionDirectory;
+
+            if (!string.IsNullOrWhiteSpace(configFilePath))
+            {
+                var configDirectory = Path.GetDirectoryName(configFilePath);
+                if (!string.IsNullOrWhiteSpace(configDirectory))
+                    yield return configDirectory;
+            }
+
+            if (projectDirectory is not null)
+                yield return projectDirectory;
+
+            yield return AppContext.BaseDirectory;
+        }
+
+        private static string? ResolveExecutableFromPath(string executablePath)
+        {
+            var pathValue = Environment.GetEnvironmentVariable("PATH");
+            if (string.IsNullOrWhiteSpace(pathValue))
+                return null;
+
+            var candidateNames = Path.HasExtension(executablePath)
+                ? new[] { executablePath }
+                : new[] { executablePath, executablePath + ".exe" };
+
+            foreach (var pathEntry in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                foreach (var candidateName in candidateNames)
+                {
+                    var candidatePath = Path.Combine(pathEntry, candidateName);
+                    if (File.Exists(candidatePath))
+                        return candidatePath;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? FindAncestorContainingFile(string startDirectory, string fileName)
+        {
+            var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
+
+            while (directory is not null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, fileName)))
+                    return directory.FullName;
+
+                directory = directory.Parent;
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<string> ReadNonEmptyLines(string value) =>
+            value.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => !string.IsNullOrWhiteSpace(line));
+
+        private static void NormalizeWhisperXOutputPath(PipelinePaths paths)
+        {
+            if (File.Exists(paths.RawJsonPath))
+                return;
+
+            var whisperXJsonPath = Path.Combine(
+                paths.JobFolder,
+                Path.ChangeExtension(Path.GetFileName(paths.WavPath), ".json"));
+
+            if (File.Exists(whisperXJsonPath))
+                File.Copy(whisperXJsonPath, paths.RawJsonPath, overwrite: true);
+        }
+
+        private static bool ContainsDirectorySeparator(string path) =>
+            path.Contains(Path.DirectorySeparatorChar) ||
+            path.Contains(Path.AltDirectorySeparatorChar);
+
+        private static string Quote(string value) =>
+            "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 }

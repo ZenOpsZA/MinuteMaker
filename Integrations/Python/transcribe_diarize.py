@@ -16,6 +16,11 @@ def main():
     parser.add_argument("--device", default="cpu", help="cpu or cuda")
     parser.add_argument("--compute-type", default="int8", help="Compute type")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
+    parser.add_argument(
+        "--language",
+        default="en",
+        help="Language code to force transcription language, e.g. en, af. Use 'auto' for detection."
+    )
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN")
@@ -30,7 +35,18 @@ def main():
     model = whisperx.load_model(args.model, device, compute_type=args.compute_type)
 
     log_stage("Transcribing")
-    result = model.transcribe(audio_file, batch_size=batch_size)
+    transcribe_kwargs = {
+        "audio": audio_file,
+        "batch_size": batch_size
+    }
+
+    if args.language and args.language.lower() != "auto":
+        transcribe_kwargs["language"] = args.language.lower()
+        log_stage(f"Using forced language: {transcribe_kwargs['language']}")
+    else:
+        log_stage("Using automatic language detection")
+
+    result = model.transcribe(**transcribe_kwargs)
 
     log_stage("Loading alignment model")
     model_a, metadata = whisperx.load_align_model(
